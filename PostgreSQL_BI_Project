@@ -1,0 +1,222 @@
+BUSINESS INTELLIGENCE 
+--Calculate Quantity of items, Sales value & Order quantity by each Subcategory in last 12 months
+
+SELECT  
+  FORMAT_DATE('%b %Y', a.ModifiedDate) period
+  , c.Name
+  , sum(a.OrderQty) Qty_item
+  , sum(a.LineTotal) total_sales
+  , count(a.SalesOrderID) order_cnt 
+FROM `adventureworks2019.Sales.SalesOrderDetail` a
+LEFT JOIN `adventureworks2019.Production.Product` b
+  ON a.ProductID = b.ProductID 
+LEFT JOIN `adventureworks2019.Production.ProductSubcategory` c
+  ON cast (b.ProductSubcategoryID as int) = c.ProductSubcategoryID
+WHERE date(a.ModifiedDate) between date_sub(date '2014-06-30', INTERVAL 12 month)
+                              and '2014-06-30'
+GROUP BY 1,2 
+ORDER BY 1 desc ,2; 
+
+--Calculate % YoY growth rate by SubCategory & release top 3 cat with highest grow rate. Can use metric: quantity_item. Round results to 2 decimal
+
+with 
+prv_item as (
+  SELECT  
+    c.Name
+    , FORMAT_DATE('%Y', a.ModifiedDate) year 
+    , sum(a.OrderQty) prv_qty
+  FROM `adventureworks2019.Sales.SalesOrderDetail` a
+  LEFT JOIN `adventureworks2019.Production.Product` b
+    ON a.ProductID = b.ProductID 
+  LEFT JOIN `adventureworks2019.Production.ProductSubcategory` c
+    ON cast (b.ProductSubcategoryID as int) = c.ProductSubcategoryID
+  GROUP BY 1,2
+  order by year)
+, final_data as (
+  select 
+    name
+    , year
+    , prv_qty
+    , lead(prv_item.prv_qty) over (partition by name order by year) qty_item
+  from prv_item) 
+
+select 
+  name
+  ,qty_item
+  ,prv_qty
+  ,round((qty_item - prv_qty)/prv_qty , 2) qty_diff
+from final_data
+order by qty_diff desc
+limit 3; 
+
+--Ranking Top 3 TeritoryID with biggest Order quantity of every year. If there's TerritoryID with same quantity in a year, do not skip the rank number.
+
+with 
+order_qty as (
+    SELECT  
+      FORMAT_DATE('%Y', a.ModifiedDate) yr
+      ,c.TerritoryID
+      ,sum(a.OrderQty) order_cnt
+    FROM `adventureworks2019.Sales.SalesOrderDetail` a
+    LEFT JOIN `adventureworks2019.Sales.SalesOrderHeader` b
+      ON a.SalesOrderID = b.SalesOrderID
+    LEFT JOIN `adventureworks2019.Sales.SalesTerritory` c
+      ON b.TerritoryID = c.TerritoryID
+    GROUP BY yr, c.TerritoryID)
+, final as (
+    select 
+      *
+      ,dense_rank() over (partition by yr order by order_cnt desc) rk 
+    from order_qty
+    order by yr desc)
+select *
+from final 
+where rk <= 3 ;
+
+--Calculate Total Discount Cost belongs to Seasonal Discount for each SubCategory
+
+SELECT 
+  FORMAT_DATE('%Y', ModifiedDate) yr
+  , Name
+  , SUM(disc_cost)  total_cost_dis
+FROM (
+    SELECT 
+      distinct a.*,
+      c.Name,
+      d.DiscountPct,
+      d.Type,
+      a.OrderQty * d.DiscountPct * UnitPrice as disc_cost
+    FROM `adventureworks2019.Sales.SalesOrderDetail` a
+    LEFT JOIN `adventureworks2019.Production.Product` b
+       ON a.ProductID = b.ProductID
+    LEFT JOIN `adventureworks2019.Production.ProductSubcategory` c
+       ON cast(b.ProductSubcategoryID as INT)= c.ProductSubcategoryID
+    LEFT JOIN `adventureworks2019.Sales.SpecialOffer` d
+       ON a.SpecialOfferID = d.SpecialOfferID 
+    WHERE lower(d.Type) like '%seasonal discount%')
+GROUP BY 1,2;
+
+--Retention rate of Customer in 2014 with status of Successfully Shipped (Cohort Analysis)
+
+with 
+order_info as (
+  SELECT  
+    extract(month from ModifiedDate) month_order,
+    extract(year from ModifiedDate) year_order,
+    CustomerID,
+    count(distinct SalesOrderID) as order_cnt
+  FROM `adventureworks2019.Sales.SalesOrderHeader` 
+  WHERE FORMAT_DATE('%Y', ModifiedDate) = '2014'
+    AND Status  = 5
+  GROUP BY 1,2,3
+  order by 3,1
+)
+,row_num as (
+  SELECT 
+    *,
+    row_number() over (partition by CustomerID order by month_order) as row_numb 
+  FROM order_info
+)
+,first_order as (
+  select *
+  from row_num 
+  where row_numb = 1
+),
+month_gap as (
+  select
+    a.CustomerID,
+    b.month_order as month_join,
+    a.month_order,
+    a.order_cnt,
+    concat('M - ', a.month_order - b.month_order) as month_diff
+  from order_info a
+  left join first_order b
+    on a.CustomerID = b.CustomerID
+  order by 1,3
+)
+select
+  month_join,
+  month_diff,
+  count(distinct CustomerID) as customer_cnt
+from month_gap
+group by 1,2
+order by 1,2;
+
+--Trend of Stock level & MoM diff % by all product in 2011. If %gr rate is null then 0. Round to 1 decimal
+
+with 
+prv_qty as (
+    SELECT 
+      a.Name
+      , FORMAT_DATE('%m', b.ModifiedDate) mth
+      , FORMAT_DATE('%Y', b.ModifiedDate) yr
+      , SUM(b.StockedQty) stock_prv
+    FROM `adventureworks2019.Production.Product` a
+    LEFT JOIN `adventureworks2019.Production.WorkOrder` b
+      ON a.ProductID = b.ProductID
+    WHERE FORMAT_DATE('%Y', b.ModifiedDate) = '2011'
+    GROUP BY Name, mth, yr)
+, raw_data as (
+    SELECT 
+      *
+      , lead(prv_qty.stock_prv) over (partition by name order by prv_qty.mth desc ) stock_qty
+    FROM prv_qty
+    ORDER BY Name)
+
+SELECT
+  *
+  ,COALESCE(round((stock_prv - stock_qty)*100.0 / stock_qty, 1),0) diff
+FROM raw_data;
+
+--Calculate Ratio of Stock / Sales in 2011 by product name, by month. Order results by month desc, ratio desc. Round Ratio to 1 decimal mom yoy
+
+with 
+sale_data as (
+    SELECT  
+      FORMAT_DATE('%m', a.ModifiedDate) mth
+      ,FORMAT_DATE('%Y', a.ModifiedDate) yr
+      ,a.ProductID
+      ,b.Name
+      ,SUM(OrderQty) sale
+    FROM `adventureworks2019.Sales.SalesOrderDetail` a
+    LEFT JOIN `adventureworks2019.Production.Product` b
+      ON a.ProductID = b.ProductID
+    WHERE FORMAT_DATE('%Y', a.ModifiedDate) = '2011'
+    GROUP BY ProductID,name, mth, yr
+)
+, stock_data as (
+    SELECT 
+      FORMAT_DATE('%m', ModifiedDate) mth
+      ,FORMAT_DATE('%Y', ModifiedDate) yr
+      ,ProductID
+      ,SUM(StockedQty) stock
+    FROM `adventureworks2019.Production.WorkOrder` 
+    WHERE FORMAT_DATE('%Y', ModifiedDate) = '2011'
+    GROUP BY ProductID, mth, yr
+)
+SELECT 
+  sale_data.mth
+  ,sale_data.yr
+  ,sale_data.ProductID
+  ,sale_data.Name
+  ,COALESCE(sale_data.sale,0) sale_cnt
+  ,COALESCE(stock_data.stock,0) stock_cnt
+  ,ROUND(stock_data.stock / sale_data.sale, 1) ratio
+FROM sale_data
+LEFT JOIN stock_data
+   ON sale_data.ProductID = stock_data.ProductID
+   AND sale_data.mth = stock_data.mth
+ORDER BY mth desc, ratio desc;
+
+--No of order and value at Pending status in 2014
+
+SELECT  
+  FORMAT_DATE('%Y', ModifiedDate) yr
+  ,Status
+  ,COUNT(PurchaseOrderID) order_cnt
+  ,SUM(TotalDue) value
+FROM `adventureworks2019.Purchasing.PurchaseOrderHeader` 
+WHERE FORMAT_DATE('%Y', ModifiedDate) = '2014' AND Status = 1 
+GROUP BY yr, Status;
+
+
