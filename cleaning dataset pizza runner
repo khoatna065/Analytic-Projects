@@ -1,0 +1,61 @@
+--Schema SQL Query SQL ResultsEdit on DB Fiddle
+--Investigate the data
+--customer_orders table
+select *
+from pizza_runner.customer_orders;
+--handle null values
+alter table pizza_runner.customer_orders
+alter column exclusions type varchar(4)
+using nullif(exclusions, '')::varchar(4);
+
+alter table pizza_runner.customer_orders
+alter column exclusions type varchar(4)
+using nullif(exclusions, 'null')::varchar(4);
+
+alter table pizza_runner.customer_orders
+alter column extras type varchar(4)
+using nullif(extras, '')::varchar(4);
+
+alter table pizza_runner.customer_orders
+alter column extras type varchar(4)
+using nullif(extras, 'null')::varchar(4);
+
+--runner_orders table
+select *
+from pizza_runner.runner_orders;
+--handle null values
+alter table pizza_runner.runner_orders
+alter column pickup_time type varchar(19)
+using nullif(pickup_time,'null') :: varchar(19),
+alter column distance type varchar(7)
+using nullif(distance, 'null') :: varchar(7),
+alter column duration type varchar(10)
+using nullif(duration, 'null') :: varchar(10);
+
+alter table pizza_runner.runner_orders
+alter column cancellation type varchar(23)
+using case when cancellation ='Nan' or cancellation ='null' then null
+			else nullif(cancellation,'') end :: varchar(23);
+
+--change data type
+alter table pizza_runner.runner_orders
+alter column pickup_time type timestamp
+using to_timestamp(pickup_time, 'YYYY-MM-DD HH24:MI:SS');
+
+--making the values in the distance and duration columns respectively consistent
+update pizza_runner.runner_orders
+set distance = replace(distance,'km','');
+
+update pizza_runner.runner_orders
+set duration = replace(replace(replace(duration,'mins',''),'minutes',''),'minute','');
+
+--rename the distance and the duration columns respectively
+alter table pizza_runner.runner_orders
+rename column distance to distance_km;
+
+alter table pizza_runner.runner_orders
+rename column duration to duration_mins;
+
+--triming white space
+update pizza_runner.runner_orders
+set distance_km = trim(distance_km), duration_mins=trim(duration_mins);
