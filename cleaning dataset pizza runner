@@ -56,6 +56,179 @@ rename column distance to distance_km;
 alter table pizza_runner.runner_orders
 rename column duration to duration_mins;
 
+--Pizza metrics
+--1. How many pizzas were ordered?
+select
+	count(*) as total_pizzas
+from pizza_runner.customer_orders;
+
+--2. How may unique customer order were made?
+select
+	count(distinct(order_id)) as total_unique_order
+from pizza_runner.customer_orders;
+
+--3. How many successful orders were delivered by each runner?
+select
+	runner_id,
+    count(order_id) as num_orders
+from pizza_runner.runner_orders
+where cancellation is null
+group by runner_id;
+
+--4. How many of each type of pizza was delivered?
+select
+	c.pizza_id,
+    count(*) num_pizzas_each_type
+from pizza_runner.customer_orders c
+join pizza_runner.runner_orders r
+	on c.order_id = r.order_id
+where r.cancellation is null
+group by c.pizza_id;
+
+--5. How many vegetarian and meatlovers were ordered by each customer?
+select
+	c.customer_id,
+    count(case when p.pizza_name = 'Vegetarian' then 1 else null end) as num_vegetarian,
+    count(case when p.pizza_name = 'Meatlovers' then 1 else null end) as num_meatlovers
+from pizza_runner.customer_orders c
+join pizza_runner.pizza_names p
+	on c.pizza_id = p.pizza_id
+group by c.customer_id
+order by customer_id;
+
+--6. What was the maximum number of pizzas delivered in a single order?
+select
+	count(*) max_pizzas_deli
+from pizza_runner.customer_orders c
+join pizza_runner.runner_orders r
+	on c.order_id = r.order_id
+where r.cancellation is null
+group by c.order_id
+order by 1 desc
+limit 1;
+
+--7. For each customer, how many delivered pizzas had at least 1 change and how many had no change?
+select
+	c.customer_id,
+	count(case when c.exclusions is not null or c.extras is not null then 1 else null end) as changed,
+    count(case when c.exclusions is null and c.extras is null then 1 else null end) as unchanged
+from pizza_runner.customer_orders c
+join pizza_runner.runner_orders r
+	on c.order_id = r.order_id
+where r.cancellation is null
+group by c.customer_id
+order by c.customer_id;
+
+--8. How many pizzas were delivered that had both exclusions and extras?
+select
+	count(*) as num_pizzas_exc_ext
+from pizza_runner.customer_orders c
+join pizza_runner.runner_orders r
+	on c.order_id = r.order_id
+where r.cancellation is null
+    and c.exclusions is not null
+    and c.extras is not null
+group by c.pizza_id;
+
+--9. What was the total volume of pizzas ordered for each hour of the day?
+select
+	date_part('hour', order_time) as hour_of_day,
+    count(*) as vol_pizzas
+from pizza_runner.customer_orders
+group by 1
+order by 1;
+
+--10. What was the volume of orders for each day of the week?
+select
+	to_char(order_time, 'day') as day_of_week,
+    count(*) as vol_orders
+from pizza_runner.customer_orders
+group by 1
+order by 2 desc;
+
+--Runner and customer experience
+--1. How many runners signed up for each 1 week period ?
+select
+	date_part('week', registration_date + interval '3 days') as week_start,
+    count(runner_id) as num_runner_signup
+from pizza_runner.runners
+group by 1
+order by 1;
+
+--2. What was the average time in minutes it took for each runner to arrive at the Pizza Runner HQ to pickup the order?
+with cte as (
+  select
+      r.runner_id,
+      (r.pickup_time - c.order_time) as time_to_arrival
+  from pizza_runner.customer_orders c
+  join pizza_runner.runner_orders r
+      on c.order_id = r.order_id
+)
+select 
+	runner_id,
+    avg(time_to_arrival) as avg_time
+from cte
+group by runner_id;
+
+--3. Is there any relationship between the number of pizzas and how long the order takes to prepare?
+with cte as (
+  select
+      c.order_id,
+      count(c.pizza_id) as num_pizzas,
+      r.pickup_time - c.order_time as time_to_prepare
+  from pizza_runner.runner_orders r
+  join pizza_runner.customer_orders c
+      on r.order_id = c.order_id
+  where r.pickup_time is not null
+  group by 1,3
+)
+select
+	num_pizzas,
+    avg(time_to_prepare) as avg_time_to_prepare
+from cte
+group by 1
+order by 1 desc;
+--The more number pizzas were ordered the more time take to prepare
+
+--4. What was the average distance travelled for each customer?
+select
+	c.customer_id,
+    avg(distance_km) as avg_distance
+from pizza_runner.runner_orders r
+join pizza_runner.customer_orders c
+	on r.order_id = c.order_id
+where r.cancellation is null
+group by 1
+order by 2 desc;
+
+--5. What was the difference between the longest and shortest delivery times for all orders?
+select
+	(max(duration_mins) - min(duration_mins)) as duration_diff
+from pizza_runner.runner_orders;
+
+--6. What was the average speed for each runner for each delivery and do you notice any trend for these values?
+with cte as (
+select
+	runner_id,
+    order_id,
+    distance_km / duration_mins as delivery_speed
+from pizza_runner.runner_orders
+)
+select
+	runner_id,
+    avg(delivery_speed) as avg_delivery_speed
+from cte
+group by 1
+order by 2 desc;
+
+--7. What is the successful delivery percentage for each runner?
+select
+	runner_id,
+    round(100.0*sum(case when cancellation is null then 1 else 0 end)/count(order_id)) as success_perc
+from pizza_runner.runner_orders
+group by 1
+order by 1
+
 --triming white space
 update pizza_runner.runner_orders
 set distance_km = trim(distance_km), duration_mins=trim(duration_mins);
